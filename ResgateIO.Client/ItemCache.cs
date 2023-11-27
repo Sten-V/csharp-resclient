@@ -1,10 +1,10 @@
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 [assembly: InternalsVisibleTo("ResgateIO.Client.UnitTests")]
 namespace ResgateIO.Client
@@ -12,10 +12,9 @@ namespace ResgateIO.Client
 
     internal class ItemCache
     {
+        private delegate TraverseState TraverseCallback(CacheItem traversedCI, TraverseState ret);
 
-        delegate TraverseState TraverseCallback(CacheItem traversedCI, TraverseState ret);
-
-        readonly struct TraverseState
+        private readonly struct TraverseState
         {
             public readonly ReferenceState State;
             public readonly string ResourceID;
@@ -33,11 +32,11 @@ namespace ResgateIO.Client
             }
         }
 
-        private static TraverseState TraverseStop = new TraverseState(ReferenceState.Stop);
-        private static TraverseState TraverseContinue = new TraverseState(ReferenceState.None);
+        private static readonly TraverseState TraverseStop = new TraverseState(ReferenceState.Stop);
+        private static readonly TraverseState TraverseContinue = new TraverseState(ReferenceState.None);
 
-        private Dictionary<string, CacheItem> cache = new Dictionary<string, CacheItem>();
-        private object cacheLock = new object();
+        private readonly Dictionary<string, CacheItem> cache = new Dictionary<string, CacheItem>();
+        private readonly object cacheLock = new object();
         private IResourceType[] resourceTypes;
         private PatternMap<ResourceFactory> resourcePatterns;
 
@@ -208,7 +207,8 @@ namespace ResgateIO.Client
                 }
             });
 
-            await tcs.Task;
+            await tcs.Task
+                .ConfigureAwait(false);
         }
 
         public CacheItem AddResourcesAndSubscribe(JToken result, string rid)
@@ -375,7 +375,7 @@ namespace ResgateIO.Client
         private Dictionary<string, CacheItemReference> getRefState(CacheItem ci)
         {
             var refs = new Dictionary<string, CacheItemReference>();
-            
+
             // Quick exit if directly subscribed
             if (ci.Subscriptions > 0)
             {
@@ -782,7 +782,8 @@ namespace ResgateIO.Client
                 }
             }
 
-            if (reason == null) {
+            if (reason == null)
+            {
                 reason = new ResError("Missing unsubscribe reason.");
             }
 

@@ -11,36 +11,33 @@ namespace ResgateIO.Client
 
     internal class ResRpc : IDisposable
     {
-        // Events
         public event EventHandler<ResourceEventArgs> ResourceEvent;
         public event ErrorEventHandler Error;
 
         private readonly object _requestLock = new object();
-
         private readonly JsonSerializerSettings _serializerSettings;
 
+        private IWebSocket _webSocket;
         private int _requestId = 1;
         private Dictionary<int, RpcRequest> _requests = new Dictionary<int, RpcRequest>();
-        private bool _disposedValue;
-
-        public IWebSocket WebSocket { get; }
+        private bool _isDisposed;
 
         public ResRpc(IWebSocket webSocket, JsonSerializerSettings serializerSettings)
         {
             _serializerSettings = serializerSettings;
-            WebSocket = webSocket;
-            WebSocket.MessageReceived += WebSocket_MessageReceived;
+            _webSocket = webSocket;
+            _webSocket.MessageReceived += WebSocket_MessageReceived;
         }
 
         private void WebSocket_MessageReceived(object sender, MessageEventArgs e)
         {
-            string msg = null;
-            MessageDto rpcmsg = null;
+            string message = null;
+            MessageDto rpcMessage = null;
 
             try
             {
-                msg = Encoding.UTF8.GetString(e.Message);
-                rpcmsg = JsonConvert.DeserializeObject<MessageDto>(msg);
+                message = Encoding.UTF8.GetString(e.Message);
+                rpcMessage = JsonConvert.DeserializeObject<MessageDto>(message);
             }
             catch (Exception ex)
             {
@@ -51,17 +48,17 @@ namespace ResgateIO.Client
                             e.Message, "Error deserializing incoming message.", ex)));
             }
 
-            if (rpcmsg.Id != null)
+            if (rpcMessage?.Id != null)
             {
-                HandleResponse(rpcmsg);
+                HandleResponse(rpcMessage);
             }
-            else if (rpcmsg.Event != null)
+            else if (rpcMessage?.Event != null)
             {
-                HandleEvent(rpcmsg);
+                HandleEvent(rpcMessage);
             }
             else
             {
-                throw new InvalidOperationException($"Invalid message from server: {msg}");
+                throw new InvalidOperationException($"Invalid message from server: {message}");
             }
         }
 
@@ -69,7 +66,7 @@ namespace ResgateIO.Client
         {
             try
             {
-                RpcRequest req = ConsumeRequest(message.Id ?? default);
+                var req = ConsumeRequest(message.Id ?? default);
 
                 if (message.Error != null)
                 {
@@ -141,7 +138,8 @@ namespace ResgateIO.Client
             {
                 try
                 {
-                    await this.WebSocket.SendAsync(dta);
+                    await _webSocket.SendAsync(dta)
+                        .ConfigureAwait(false);
                 }
                 catch (ResException e)
                 {
@@ -160,14 +158,14 @@ namespace ResgateIO.Client
         {
             lock (_requestLock)
             {
-                if (this._requests == null)
+                if (_requests == null)
                 {
                     throw new InvalidOperationException($"Incoming request disposed: {id}");
                 }
 
-                if (this._requests.TryGetValue(id, out RpcRequest req))
+                if (_requests.TryGetValue(id, out var req))
                 {
-                    this._requests.Remove(id);
+                    _requests.Remove(id);
                     return req;
                 }
             }
@@ -175,34 +173,45 @@ namespace ResgateIO.Client
             throw new InvalidOperationException($"Invalid incoming request ID: {id}");
         }
 
-        protected virtual void Dispose(bool disposing)
+        public Task DisconnectAsync()
         {
-            if (_disposedValue)
-                return;
-
-            if (disposing)
-            {
-                // Call all pending requests with a connection closed error.
-                Dictionary<int, RpcRequest> pendingRequests;
-                lock (_requestLock)
-                {
-                    pendingRequests = this._requests;
-                    this._requests = null;
-                }
-                foreach (var req in pendingRequests)
-                {
-                    Task.Run(() => req.Value.Callback(null, new ResError(ResError.CodeConnectionError, "Connection closed")));
-                }
-
-                WebSocket.Dispose();
-            }
-            _disposedValue = true;
+            return _webSocket.DisconnectAsync();
         }
 
         public void Dispose()
         {
-            Dispose(disposing: true);
-            GC.SuppressFinalize(this);
+            if (_isDisposed)
+                return;
+
+            AbortPendingRequests();
+
+            _webSocket?.Dispose();
+            _webSocket = null;
+
+            ResourceEvent = null;
+            Error = null;
+
+            _isDisposed = true;
+        }
+
+        private void AbortPendingRequests()
+        {
+            if (_requests == null)
+                return;
+
+            Dictionary<int, RpcRequest> pendingRequests;
+            lock (_requestLock)
+            {
+                pendingRequests = _requests;
+                _requests = null;
+            }
+
+            foreach (var req in pendingRequests)
+            {
+                Task.Run(() => req.Value.Callback(
+                    null,
+                    new ResError(ResError.CodeConnectionError, "Connection closed")));
+            }
         }
     }
 }
